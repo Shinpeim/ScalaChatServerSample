@@ -7,8 +7,10 @@ case class ChatCommand(message:String) extends Command
 case class ExitCommand() extends Command
 case class UnknownCommand(command:String) extends Command
 
-object ClientIteratee {
- def readCommand: IO.Iteratee[Command] = {
+object ClientHandler {
+  val log = LogManager.getLogger(this.getClass.getName)
+
+  private def readCommand: IO.Iteratee[Command] = {
     for {
       line <- IO.takeUntil(ByteString("\r\n"))
       messages = line.decodeString("US-ASCII").split(" ")
@@ -20,13 +22,9 @@ object ClientIteratee {
       case _ => UnknownCommand(command)
     }
   }
-}
-
-object ClientHandler {
-  val log = LogManager.getLogger(this.getClass.getName)
 
   def handleInput(server: ActorRef, socket: IO.SocketHandle): IO.Iteratee[Unit] = IO repeat {
-    ClientIteratee.readCommand map {
+    readCommand map {
       case ExitCommand() =>
         log.debug("got EXIT command")
         socket.close
