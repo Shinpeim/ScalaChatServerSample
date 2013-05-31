@@ -3,9 +3,9 @@ import akka.util.ByteString
 import org.apache.logging.log4j.LogManager
 
 trait Command
-case class ChatCommand(message:String) extends Command
-case class ExitCommand() extends Command
-case class UnknownCommand(command:String) extends Command
+case class  ChatCommand(message:String) extends Command
+case object ExitCommand extends Command
+case class  UnknownCommand(command:String) extends Command
 
 object ClientHandler {
   val log = LogManager.getLogger(this.getClass.getName)
@@ -18,14 +18,14 @@ object ClientHandler {
       args = messages.tail
     } yield command match {
       case "CHAT" => ChatCommand(args.lift(0).getOrElse(""))
-      case "EXIT" => ExitCommand()
+      case "EXIT" => ExitCommand
       case _ => UnknownCommand(command)
     }
   }
 
   def handleInput(server: ActorRef, socket: IO.SocketHandle): IO.Iteratee[Unit] = IO repeat {
     readCommand map {
-      case ExitCommand() =>
+      case ExitCommand =>
         log.debug("got EXIT command")
         socket.close
 
