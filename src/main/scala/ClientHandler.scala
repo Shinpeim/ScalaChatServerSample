@@ -17,7 +17,7 @@ object ClientHandler {
       command = messages.head
       args = messages.tail
     } yield command match {
-      case "CHAT" => ChatCommand(args.lift(0).getOrElse(""))
+      case "CHAT" => ChatCommand(args.headOption.getOrElse(""))
       case "EXIT" => ExitCommand
       case _ => UnknownCommand(command)
     }
