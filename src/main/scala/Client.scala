@@ -2,6 +2,8 @@ import akka.actor.IO.SocketHandle
 import akka.actor.{Actor, IO, ActorRef}
 import akka.util.ByteString
 import org.apache.logging.log4j.LogManager
+import scala.concurrent.{ExecutionContext, Future}
+import ExecutionContext.Implicits.global
 
 trait Command
 case class  NameCommand(name: String) extends Command
@@ -14,27 +16,52 @@ case class  InvalidCommand(message: String) extends Command
 case class Write(message: String)
 case class SetSocket(socket: IO.SocketHandle)
 
-class Client(roomService: ActorRef) extends Actor {
+class Client(roomService: ActorRef, clientSocket:Future[SocketHandle]) extends Actor {
   val log = LogManager.getLogger(this.getClass.getName)
-  var socket: Option[SocketHandle] = None
-  var iterateeRef: Option[IO.IterateeRefAsync[Unit]] = None
+  var iterateeRef: IO.IterateeRefAsync[Unit] = null
   var commandHandler: CommandHandler = null
+  var socket:Future[SocketHandle] = clientSocket
+
+  override def preStart = {
+    log.debug("Connected!")
+    commandHandler = default.orElse(fallbackHandler)
+    socket onFailure {
+      case e =>
+        log.error(e)
+        commandHandler(ExitCommand)
+    }
+    iterateeRef = IO.IterateeRef.async(handleInput)(context.dispatcher)
+  }
+
+  private def writeToSocket(message: String) = {
+    socket = socket.map({ s =>
+      s.asWritable.write(ByteString("> " + message + "\r\n"))
+      s
+    })
+  }
+
+  private def closeSocket = {
+    socket = socket.map(s =>{
+      s.close
+      s
+    })
+  }
 
   type CommandHandler = PartialFunction[Command, Unit]
   val fallbackHandler: CommandHandler = {
-    case InvalidCommand(message) => writeToClient(message)
-    case UnknownCommand(command) => writeToClient("unknown command:" + command)
-    case _ => writeToClient("unsupported command")
+    case InvalidCommand(message) => writeToSocket(message)
+    case UnknownCommand(command) => writeToSocket("unknown command:" + command)
+    case _ => writeToSocket("unsupported command")
   }
   def default: CommandHandler = {
-    case ExitCommand          => socket.foreach(_.close)
+    case ExitCommand       => closeSocket
     case NameCommand(name) =>
       commandHandler = named(name).orElse(fallbackHandler)
-      writeToClient("set name to:" + name)
+      writeToSocket("set name to:" + name)
   }
   def named(name: String): CommandHandler = {
-    case ExitCommand          => socket.foreach(_.close)
-    case EnterCommand(room)   =>
+    case ExitCommand        => closeSocket
+    case EnterCommand(room) =>
       commandHandler = entered(name, room).orElse(fallbackHandler)
       roomService ! Enter(room, self, name)
   }
@@ -45,7 +72,6 @@ class Client(roomService: ActorRef) extends Actor {
     case ChatCommand(message) => roomService ! BroadCast(room, name + " said " + message)
   }
 
-  override def preStart = commandHandler = default.orElse(fallbackHandler)
 
   private def readCommand: IO.Iteratee[Command] = {
     for {
@@ -82,30 +108,21 @@ class Client(roomService: ActorRef) extends Actor {
     }
   }
 
-  private def writeToClient(s: String) = {
-    socket.foreach(_.asWritable.write(ByteString("> " + s + "\r\n")))
-  }
-
   def handleInput: IO.Iteratee[Unit] = IO repeat {
     readCommand.map(commandHandler(_))
   }
 
   def receive = {
-    case SetSocket(clientSocket) =>
-      log.debug("Connected!")
-      socket = Some(clientSocket)
-      iterateeRef = Some(IO.IterateeRef.async(handleInput)(context.dispatcher))
-
     case IO.Read(socket, bytes) =>
       log.debug("READ:" + bytes.toString)
-      iterateeRef.foreach(_.apply(IO.Chunk(bytes)))
+      iterateeRef(IO.Chunk(bytes))
 
     case IO.Closed(socket, cause) =>
-      iterateeRef.foreach(_.apply(IO.EOF))
+      commandHandler(ExitCommand)
+      iterateeRef(IO.EOF)
       socket.close
-      iterateeRef = None
 
     case Write(message) =>
-      writeToClient(message)
+      writeToSocket(message)
   }
 }

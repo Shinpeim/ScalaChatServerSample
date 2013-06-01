@@ -1,4 +1,5 @@
 import akka.actor._
+import scala.concurrent.{Promise, Future}
 
 case class ChatMessage(message: String)
 
@@ -9,7 +10,11 @@ class ChatServer(port: Int, roomService: ActorRef) extends Actor {
 
   def receive = {
     case IO.NewClient(serverSocket) =>
-      val clientActor = context.actorOf(Props(new Client(roomService)))
-      clientActor ! SetSocket(serverSocket.accept()(clientActor))
+      val socketPromise = Promise[IO.SocketHandle]
+      val futureSocket = socketPromise.future
+
+      val clientActor = context.actorOf(Props(new Client(roomService, futureSocket)))
+      val socket = serverSocket.accept()(clientActor)
+      socketPromise.success(socket)
   }
 }
