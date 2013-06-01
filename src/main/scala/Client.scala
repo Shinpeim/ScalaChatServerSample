@@ -4,6 +4,7 @@ import akka.util.ByteString
 import org.apache.logging.log4j.LogManager
 import scala.concurrent.{ExecutionContext, Future}
 import ExecutionContext.Implicits.global
+import scala.util.Success
 
 trait Command
 case class  NameCommand(name: String) extends Command
@@ -25,26 +26,19 @@ class Client(roomService: ActorRef, clientSocket:Future[SocketHandle]) extends A
   override def preStart = {
     log.debug("Connected!")
     commandHandler = default.orElse(fallbackHandler)
-    socket onFailure {
-      case e =>
-        log.error(e)
-        commandHandler(ExitCommand)
-    }
     iterateeRef = IO.IterateeRef.async(handleInput)(context.dispatcher)
   }
 
   private def writeToSocket(message: String) = {
-    socket = socket.map({ s =>
-      s.asWritable.write(ByteString("> " + message + "\r\n"))
-      s
-    })
+    socket = socket andThen {
+      case Success(s) => s.asWritable.write(ByteString("> " + message + "\r\n"))
+    }
   }
 
   private def closeSocket = {
-    socket = socket.map(s =>{
-      s.close
-      s
-    })
+    socket = socket andThen {
+      case Success(s) => s.close
+    }
   }
 
   type CommandHandler = PartialFunction[Command, Unit]
