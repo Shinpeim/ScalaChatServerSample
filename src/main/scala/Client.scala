@@ -4,6 +4,7 @@ import akka.util.ByteString
 import org.apache.logging.log4j.LogManager
 
 trait Command
+case class  NameCommand(name: String) extends Command
 case class  EnterCommand(room: String) extends Command
 case object ExitCommand extends Command
 case class  ChatCommand(message: String) extends Command
@@ -23,23 +24,28 @@ class Client(roomService: ActorRef) extends Actor {
   val fallbackHandler: CommandHandler = {
     case InvalidCommand(message) => writeToClient(message)
     case UnknownCommand(command) => writeToClient("unknown command:" + command)
+    case _ => writeToClient("unsupported command")
   }
-  var notEnterd: CommandHandler = {
+  def default: CommandHandler = {
+    case ExitCommand          => socket.foreach(_.close)
+    case NameCommand(name) =>
+      commandHandler = named(name).orElse(fallbackHandler)
+      writeToClient("set name to:" + name)
+  }
+  def named(name: String): CommandHandler = {
     case ExitCommand          => socket.foreach(_.close)
     case EnterCommand(room)   =>
-      commandHandler = enterd(room).orElse(fallbackHandler)
-      roomService ! Enter(room, self)
-    case ChatCommand(message) => writeToClient("please ENTER before sending CHAT command")
+      commandHandler = entered(name, room).orElse(fallbackHandler)
+      roomService ! Enter(room, self, name)
   }
-  def enterd(room: String): CommandHandler = {
+  def entered(name: String, room: String): CommandHandler = {
     case ExitCommand =>
-      commandHandler = notEnterd.orElse(fallbackHandler)
-      roomService ! Exit(room, self)
-    case EnterCommand(_) => writeToClient("you are already in the room:" + room)
-    case ChatCommand(message) => roomService ! Chat(room, message)
+      commandHandler = named(name).orElse(fallbackHandler)
+      roomService ! Exit(room, self, name)
+    case ChatCommand(message) => roomService ! BroadCast(room, name + " said " + message)
   }
 
-  override def preStart = commandHandler = notEnterd.orElse(fallbackHandler)
+  override def preStart = commandHandler = default.orElse(fallbackHandler)
 
   private def readCommand: IO.Iteratee[Command] = {
     for {
@@ -48,13 +54,15 @@ class Client(roomService: ActorRef) extends Actor {
       command = messages.head
       args = messages.tail
     } yield command match {
-      case "CHAT" =>
-        log.debug("got CHAT command with: " + args.toString )
-        ChatCommand(args.headOption.getOrElse(""))
+      case "NAME" =>
+        log.debug("got NAME command with:" + args.toString)
+        args.headOption match {
+          case None => InvalidCommand("name is required")
+          case Some(name) => NameCommand(name)
+        }
 
       case "ENTER" =>
         log.debug("got ENTER command with: " + args.toString )
-        ChatCommand(args.headOption.getOrElse(""))
         args.headOption match {
           case None => InvalidCommand("room name is required")
           case Some(room) => EnterCommand(room)
@@ -64,6 +72,10 @@ class Client(roomService: ActorRef) extends Actor {
         log.debug("got EXIT command")
         ExitCommand
 
+      case "CHAT" =>
+        log.debug("got CHAT command with: " + args.toString )
+        ChatCommand(args.headOption.getOrElse(""))
+
       case _ =>
         log.debug("got unkown command" + command)
         UnknownCommand(command)
@@ -71,7 +83,7 @@ class Client(roomService: ActorRef) extends Actor {
   }
 
   private def writeToClient(s: String) = {
-    socket.foreach(_.asWritable.write(ByteString(s + "\r\n")))
+    socket.foreach(_.asWritable.write(ByteString("> " + s + "\r\n")))
   }
 
   def handleInput: IO.Iteratee[Unit] = IO repeat {

@@ -1,5 +1,4 @@
 import akka.actor._
-import akka.util.ByteString
 
 case class ChatMessage(message: String)
 
