@@ -1,12 +1,15 @@
 import akka.actor._
-import scala.concurrent.{Promise, Future}
+import akka.actor.SupervisorStrategy.{Resume, Stop}
+import scala.concurrent.Promise
 
 case class ChatMessage(message: String)
 
 class ChatServer(port: Int, roomService: ActorRef) extends Actor {
-  val state = IO.IterateeRef.Map.async[IO.SocketHandle]()(context.dispatcher)
-
   override def preStart = IOManager(context.system).listen("localhost", port)
+
+  override val supervisorStrategy = OneForOneStrategy() {
+    case _: SocketClosedException => Stop // stop actor when socket is closed
+  }
 
   def receive = {
     case IO.NewClient(serverSocket) =>

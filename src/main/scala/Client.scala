@@ -17,16 +17,22 @@ case class  InvalidCommand(message: String) extends Command
 case class Write(message: String)
 case class SetSocket(socket: IO.SocketHandle)
 
+class SocketClosedException extends RuntimeException
+
 class Client(roomService: ActorRef, clientSocket:Future[SocketHandle]) extends Actor {
   val log = LogManager.getLogger(this.getClass.getName)
   var iterateeRef: IO.IterateeRefAsync[Unit] = null
   var commandHandler: CommandHandler = null
   var socket:Future[SocketHandle] = clientSocket
 
+  // lifecycle hooks
   override def preStart = {
     log.debug("Connected!")
     commandHandler = default.orElse(fallbackHandler)
     iterateeRef = IO.IterateeRef.async(handleInput)(context.dispatcher)
+  }
+  override def postStop {
+    log.debug("Client Actor stopped")
   }
 
   private def writeToSocket(message: String) = {
@@ -115,6 +121,7 @@ class Client(roomService: ActorRef, clientSocket:Future[SocketHandle]) extends A
       commandHandler(ExitCommand)
       iterateeRef(IO.EOF)
       socket.close
+      throw new SocketClosedException
 
     case Write(message) =>
       writeToSocket(message)
